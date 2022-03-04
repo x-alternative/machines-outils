@@ -8,4 +8,4 @@ unzip Data/machines-outils.zip
 Install dotnet
 cd Analyse
 dotnet build
-dotnet run --project finances // specify data location as argument
+dotnet run --release --project finances // specify data location as (unzipped archive) argument
