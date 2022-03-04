@@ -3,9 +3,9 @@
 
 unzip Data/machines-outils.zip
 
-- compile and run
+## compile and run
 
 Install dotnet
 cd Analyse
 dotnet build
-dotnet run --project finances
+dotnet run --project finances // specify data location as argument
