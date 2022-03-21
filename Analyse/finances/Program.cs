@@ -13,11 +13,9 @@ namespace finances
 
     class Company
     {
-        public string ID { get; set; }
-        public string SIRET { get; set; }
+        public int ID { get; set; }
         public string Name { get; set; }
         public string Address { get; set; }
-        public string Naf { get; set; }
         public string ShareholderType { get; set; }
         public string EmployeeCount { get; set; }
 
@@ -33,7 +31,7 @@ namespace finances
 
         public override int GetHashCode()
         {
-            return int.Parse(this.ID);
+            return this.ID;
         }
 
         public override string ToString()
@@ -46,9 +44,23 @@ namespace finances
     {
         static readonly int[] allYears = new int[6] { 2021, 2020, 2019, 2018, 2017, 2016 };
 
+        static readonly HashSet<String> metricsOfInterest = new HashSet<string> {
+            "Résultat net",
+            "Chiffre d'affaires",
+            "Valeur ajoutée",
+            "Marge brute",
+            "Excédent brut d'exploitation (EBITDA)",
+            "Résultat d'exploitation (EBIT)",
+            "Délai de paiement clients, en jours",
+            "Délai de paiement fournisseurs, en jours",
+            "Trésorerie",
+            "Dettes financières",
+            "Dette financière nette (DFN)",
+        };
+
         static readonly string[] exclude = new string[] { "000 - note", "0001 - données macro" };
 
-        static List<Company> companies = new List<Company>();
+        static Dictionary<int, Company> companies = new Dictionary<int, Company>();
 
         const string statsJsonPath = "../Data/stats.json";
         const string reportPath = "../Data/report.xlsx";
@@ -58,7 +70,7 @@ namespace finances
             var baseDirectory = args.Length > 1 ? args[1] : "/home/rportalez/Documents/machines/data";
             ReadMainFile(new FileInfo(Path.Combine(baseDirectory, "000 - etablissements.xlsx")));
             FinancesStats values;
-            if (!File.Exists(statsJsonPath))
+            if (false) //!File.Exists(statsJsonPath))
             {
                 values = ReadAndParseRawData(baseDirectory, out int companiesCount, out int financialDataCount);
                 File.WriteAllText(statsJsonPath, JsonConvert.SerializeObject(values));
@@ -84,8 +96,8 @@ namespace finances
                 return kvp.Value.ToDictionary(kk =>
                 {
                     var key = kk.Key;
-                    var id = key.Substring(0, 3);
-                    return companies.Find(c => c.ID == id);
+                    var id = int.Parse(key.Substring(0, key.IndexOf('-') - 1));
+                    return companies[id];
                 }, kk => kk.Value);
             }).OrderByDescending(kvp => kvp.Value.Count()).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
             return values;
@@ -99,9 +111,10 @@ namespace finances
             foreach (var dir in Directory.GetDirectories(baseDirectory))
             {
                 DirectoryInfo dirInfo = new DirectoryInfo(dir);
-                var ID = dirInfo.Name.Substring(0, 3);
-                var company = companies.Find(x => x.ID == ID);
-                if (!exclude.Contains(dirInfo.Name) && company != null)
+                var companyId = int.Parse(dirInfo.Name.Substring(0, 3));
+
+                var company = companies.FirstOrDefault(c => c.Value.ID == companyId);
+                if (!exclude.Contains(dirInfo.Name) && company.Value != null)
                 {
                     var tables = Directory.GetFiles(dir, "*.xlsx");
                     if (!tables.Any())
@@ -117,7 +130,7 @@ namespace finances
                         var name = fileInfo.Name;
                         if (int.TryParse(name.Substring(name.Length - 9, 4), out int year))
                         {
-                            ReadFinanceFile(fileInfo, year, company, values);
+                            ReadFinanceFile(fileInfo, year, company.Value, values);
                         }
                         else
                         {
@@ -139,9 +152,8 @@ namespace finances
                 var cvaeSheet = workbook.Worksheets.Add("coût de la dette - résultat net");
                 var capitalSheet = workbook.Worksheets["coût du capital"];
                 cvaeSheet.Cells[1, 1].Value = "ID";
-                cvaeSheet.Cells[1, 2].Value = "Name";
-                cvaeSheet.Cells[1, 3].Value = "SIRET";
-                int columnNum = 4;
+                cvaeSheet.Cells[1, 2].Value = "Effectifs";
+                int columnNum = 3;
                 foreach (var year in allYears)
                 {
                     cvaeSheet.Cells[1, columnNum++].Value = year;
@@ -151,16 +163,14 @@ namespace finances
                 for (int rowNum = 2; rowNum <= rowCount; ++rowNum)
                 {
                     columnNum = 1;
-                    var companyId = capitalSheet.Cells[rowNum, 1].GetValue<String>();
-                    var companyName = capitalSheet.Cells[rowNum, 2].GetValue<String>();
-                    var companySiret = capitalSheet.Cells[rowNum, 3].GetValue<String>();
+                    var companyId = int.Parse(capitalSheet.Cells[rowNum, 1].GetValue<String>());
+                    var employeeCount = companies[companyId].EmployeeCount;
                     cvaeSheet.Cells[rowNum, columnNum++].Value = companyId;
-                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyName;
-                    cvaeSheet.Cells[rowNum, columnNum++].Value = companySiret;
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = employeeCount;
 
                     for (int yearId = 0; yearId < allYears.Length; ++yearId)
                     {
-                        var capitalCost = capitalSheet.Cells[rowNum, yearId + 4].GetValue<double>();
+                        var capitalCost = capitalSheet.Cells[rowNum, yearId + 2].GetValue<double>();
                         int year = allYears[yearId];
                         if (values["résultat net"].Any(c => c.Key.ID == companyId))
                         {
@@ -171,10 +181,11 @@ namespace finances
                                 double.TryParse(netResultStr, out netResult);
                             }
 
-                            if (netResult != 0)
+                            if (netResult != 0 && capitalCost != 0)
                             {
                                 cvaeSheet.Cells[rowNum, columnNum].Value = Math.Abs(capitalCost / netResult);
                             }
+
                             columnNum++;
                         }
                     }
@@ -193,35 +204,30 @@ namespace finances
                 var caSheet = workbook.Worksheets["chiffre d'affaires"];
                 var vaSheet = workbook.Worksheets["valeur ajoutée"];
                 cvaeSheet.Cells[1, 1].Value = "ID";
-                cvaeSheet.Cells[1, 2].Value = "Name";
-                cvaeSheet.Cells[1, 3].Value = "SIRET";
+                cvaeSheet.Cells[1, 2].Value = "Effectifs";
                 cvaeRatioSheet.Cells[1, 1].Value = "ID";
-                cvaeRatioSheet.Cells[1, 2].Value = "Name";
-                cvaeRatioSheet.Cells[1, 3].Value = "SIRET";
-                int columnNum = 4;
+                cvaeRatioSheet.Cells[1, 2].Value = "Effectifs";
+                int columnNum = 3;
                 foreach (var year in allYears)
                 {
-                    cvaeSheet.Cells[1, columnNum++].Value = year;
-                    cvaeRatioSheet.Cells[1, columnNum].Value = year;
+                    cvaeSheet.Cells[1, columnNum].Value = year;
+                    cvaeRatioSheet.Cells[1, columnNum++].Value = year;
                 }
 
                 int rowCount = caSheet.Dimension.Rows;
                 for (int rowNum = 2; rowNum <= rowCount; ++rowNum)
                 {
                     columnNum = 1;
-                    var companyId = vaSheet.Cells[rowNum, 1].GetValue<String>();
-                    var companyName = vaSheet.Cells[rowNum, 2].GetValue<String>();
-                    var companySiret = vaSheet.Cells[rowNum, 3].GetValue<String>();
-                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyId;
-                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companyId;
-                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyName;
-                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companyName;
-                    cvaeSheet.Cells[rowNum, columnNum++].Value = companySiret;
-                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companySiret;
+                    var companyId = int.Parse(vaSheet.Cells[rowNum, 1].GetValue<String>());
+                    var effectifs = companies[companyId].EmployeeCount;
+                    cvaeSheet.Cells[rowNum, columnNum].Value = companyId;
+                    cvaeRatioSheet.Cells[rowNum, columnNum++].Value = companyId;
+                    cvaeSheet.Cells[rowNum, columnNum].Value = effectifs;
+                    cvaeRatioSheet.Cells[rowNum, columnNum++].Value = effectifs;
                     for (int yearId = 0; yearId < allYears.Length; ++yearId)
                     {
-                        var ca = caSheet.Cells[rowNum, yearId + 4].GetValue<double>();
-                        var va = vaSheet.Cells[rowNum, yearId + 4].GetValue<double>();
+                        var ca = caSheet.Cells[rowNum, yearId + 3].GetValue<double>();
+                        var va = vaSheet.Cells[rowNum, yearId + 3].GetValue<double>();
                         int year = allYears[yearId];
                         var history = values["résultat net"].First(c => c.Key.ID == companyId).Value;
                         double netResult = 0;
@@ -236,12 +242,16 @@ namespace finances
                         {
                             cvae = 0;
                         }
-
-                        cvaeSheet.Cells[rowNum, columnNum++].Value = cvae;
-                        if (netResult != 0)
+                        if (cvae != 0)
+                        {
+                            cvaeSheet.Cells[rowNum, columnNum].Value = cvae;
+                        }
+                        if (netResult != 0 && cvae != 0)
                         {
                             cvaeRatioSheet.Cells[rowNum, columnNum].Value = Math.Abs(cvae / netResult);
                         }
+
+                        columnNum++;
                     }
                 }
 
@@ -265,8 +275,7 @@ namespace finances
                     int rowNum = 1;
                     int columnNum = 1;
                     cells[rowNum, columnNum++].Value = "ID";
-                    cells[rowNum, columnNum++].Value = "Name";
-                    cells[rowNum, columnNum++].Value = "SIRET";
+                    cells[rowNum, columnNum++].Value = "Effectifs";
                     foreach (var year in allYears)
                     {
                         cells[rowNum, columnNum++].Value = year;
@@ -276,8 +285,7 @@ namespace finances
                     {
                         columnNum = 1;
                         cells[rowNum, columnNum++].Value = company.ID;
-                        cells[rowNum, columnNum++].Value = company.Name;
-                        cells[rowNum, columnNum++].Value = company.SIRET;
+                        cells[rowNum, columnNum++].Value = company.EmployeeCount;
                         foreach (var year in allYears)
                         {
                             string sval = String.Empty;
@@ -334,9 +342,10 @@ namespace finances
                     var row = sheet.Cells[rowNum, 1, rowNum, columnCount];
                     var val = row.GetCellValue<String>(0, 3);
                     var key = row.GetCellValue<String>(0, 0);
-                    if (!String.IsNullOrWhiteSpace(val) && val != "n/c" && val != "n/a" && !String.IsNullOrEmpty(key))
+                    if (metricsOfInterest.Contains(key) && !String.IsNullOrWhiteSpace(val) && val != "n/c" && val != "n/a" && !String.IsNullOrEmpty(key))
                     {
                         var key_lower = key.ToLowerInvariant();
+
                         if (!values.ContainsKey(key_lower))
                         {
                             values.Add(key_lower, new Dictionary<Company, Dictionary<int, string>>());
@@ -368,6 +377,11 @@ namespace finances
         private static void ReadMainFile(FileInfo fileInfo)
         {
 
+            if (!fileInfo.Exists)
+            {
+                Console.WriteLine("main file does not exist");
+                Environment.Exit(6); // abort
+            }
             using (ExcelPackage xlPackage = new ExcelPackage(fileInfo))
             {
                 var workbook = xlPackage.Workbook;
@@ -379,23 +393,18 @@ namespace finances
                 {
                     var row = sheet.Cells[rowNum, 1, rowNum, columnCount];
                     var status = row.GetCellValue<String>(0, 23);
-                    if (String.IsNullOrEmpty(status))
+                    if (String.IsNullOrWhiteSpace(status))
                     {
                         var company = new Company();
-                        company.ID = row.GetCellValue<String>(0, 0);
+                        company.ID = row.GetCellValue<int>(0, 0);
                         company.Name = row.GetCellValue<String>(0, 1);
-                        company.SIRET = row.GetCellValue<String>(0, 3);
                         company.EmployeeCount = row.GetCellValue<String>(0, 4);
-                        company.Naf = row.GetCellValue<String>(0, 5);
-                        company.Address = String.Format("{0} {1} {2} {3} {4}",
-                            row.GetCellValue<String>(0, 8),
-                            row.GetCellValue<String>(0, 10),
-                            row.GetCellValue<String>(0, 11),
-                            row.GetCellValue<String>(0, 12),
-                            row.GetCellValue<String>(0, 13)
+                        company.Address = String.Format("{0}, {1}",
+                            row.GetCellValue<String>(0, 14),
+                            row.GetCellValue<String>(0, 12)
                         );
                         company.ShareholderType = row.GetCellValue<String>(0, 24);
-                        companies.Add(company);
+                        companies.Add(company.ID, company);
                     }
                 }
             }
