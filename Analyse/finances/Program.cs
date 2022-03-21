@@ -44,6 +44,8 @@ namespace finances
 
     class Program
     {
+        static readonly int[] allYears = new int[6] { 2021, 2020, 2019, 2018, 2017, 2016 };
+
         static readonly string[] exclude = new string[] { "000 - note", "0001 - données macro" };
 
         static List<Company> companies = new List<Company>();
@@ -67,6 +69,8 @@ namespace finances
             }
 
             CreateExcelReport(values);
+            ComputeTaxesInReport(values);
+            ComputeCapitalCost(values);
         }
 
         private static FinancesStats ReadLocalStats()
@@ -126,13 +130,131 @@ namespace finances
             return values.OrderByDescending(kvp => kvp.Value.Count()).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
         }
 
+        private static void ComputeCapitalCost(FinancesStats values)
+        {
+
+            using (ExcelPackage xlPackage = new ExcelPackage(new FileInfo(reportPath)))
+            {
+                var workbook = xlPackage.Workbook;
+                var cvaeSheet = workbook.Worksheets.Add("coût de la dette - résultat net");
+                var capitalSheet = workbook.Worksheets["coût du capital"];
+                cvaeSheet.Cells[1, 1].Value = "ID";
+                cvaeSheet.Cells[1, 2].Value = "Name";
+                cvaeSheet.Cells[1, 3].Value = "SIRET";
+                int columnNum = 4;
+                foreach (var year in allYears)
+                {
+                    cvaeSheet.Cells[1, columnNum++].Value = year;
+                }
+
+                int rowCount = capitalSheet.Dimension.Rows;
+                for (int rowNum = 2; rowNum <= rowCount; ++rowNum)
+                {
+                    columnNum = 1;
+                    var companyId = capitalSheet.Cells[rowNum, 1].GetValue<String>();
+                    var companyName = capitalSheet.Cells[rowNum, 2].GetValue<String>();
+                    var companySiret = capitalSheet.Cells[rowNum, 3].GetValue<String>();
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyId;
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyName;
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companySiret;
+
+                    for (int yearId = 0; yearId < allYears.Length; ++yearId)
+                    {
+                        var capitalCost = capitalSheet.Cells[rowNum, yearId + 4].GetValue<double>();
+                        int year = allYears[yearId];
+                        if (values["résultat net"].Any(c => c.Key.ID == companyId))
+                        {
+                            var history = values["résultat net"].First(c => c.Key.ID == companyId).Value;
+                            double netResult = 0;
+                            if (history.TryGetValue(year, out string netResultStr))
+                            {
+                                double.TryParse(netResultStr, out netResult);
+                            }
+
+                            if (netResult != 0)
+                            {
+                                cvaeSheet.Cells[rowNum, columnNum].Value = Math.Abs(capitalCost / netResult);
+                            }
+                            columnNum++;
+                        }
+                    }
+                }
+                xlPackage.Save();
+            }
+        }
+
+        private static void ComputeTaxesInReport(FinancesStats values)
+        {
+            using (ExcelPackage xlPackage = new ExcelPackage(new FileInfo(reportPath)))
+            {
+                var workbook = xlPackage.Workbook;
+                var cvaeSheet = workbook.Worksheets.Add("cvae");
+                var cvaeRatioSheet = workbook.Worksheets.Add("ratio cvae résultat net");
+                var caSheet = workbook.Worksheets["chiffre d'affaires"];
+                var vaSheet = workbook.Worksheets["valeur ajoutée"];
+                cvaeSheet.Cells[1, 1].Value = "ID";
+                cvaeSheet.Cells[1, 2].Value = "Name";
+                cvaeSheet.Cells[1, 3].Value = "SIRET";
+                cvaeRatioSheet.Cells[1, 1].Value = "ID";
+                cvaeRatioSheet.Cells[1, 2].Value = "Name";
+                cvaeRatioSheet.Cells[1, 3].Value = "SIRET";
+                int columnNum = 4;
+                foreach (var year in allYears)
+                {
+                    cvaeSheet.Cells[1, columnNum++].Value = year;
+                    cvaeRatioSheet.Cells[1, columnNum].Value = year;
+                }
+
+                int rowCount = caSheet.Dimension.Rows;
+                for (int rowNum = 2; rowNum <= rowCount; ++rowNum)
+                {
+                    columnNum = 1;
+                    var companyId = vaSheet.Cells[rowNum, 1].GetValue<String>();
+                    var companyName = vaSheet.Cells[rowNum, 2].GetValue<String>();
+                    var companySiret = vaSheet.Cells[rowNum, 3].GetValue<String>();
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyId;
+                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companyId;
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companyName;
+                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companyName;
+                    cvaeSheet.Cells[rowNum, columnNum++].Value = companySiret;
+                    cvaeRatioSheet.Cells[rowNum, columnNum].Value = companySiret;
+                    for (int yearId = 0; yearId < allYears.Length; ++yearId)
+                    {
+                        var ca = caSheet.Cells[rowNum, yearId + 4].GetValue<double>();
+                        var va = vaSheet.Cells[rowNum, yearId + 4].GetValue<double>();
+                        int year = allYears[yearId];
+                        var history = values["résultat net"].First(c => c.Key.ID == companyId).Value;
+                        double netResult = 0;
+                        if (history.TryGetValue(year, out string netResultStr))
+                        {
+                            double.TryParse(netResultStr, out netResult);
+                        }
+
+                        var cvae = Cvae.ComputeTax(ca, va);
+                        // skip empty cells
+                        if (ca == 0 || va == 0)
+                        {
+                            cvae = 0;
+                        }
+
+                        cvaeSheet.Cells[rowNum, columnNum++].Value = cvae;
+                        if (netResult != 0)
+                        {
+                            cvaeRatioSheet.Cells[rowNum, columnNum].Value = Math.Abs(cvae / netResult);
+                        }
+                    }
+                }
+
+                xlPackage.Save();
+            }
+        }
+
         private static void CreateExcelReport(FinancesStats values)
         {
             if (File.Exists(reportPath))
             {
                 File.Delete(reportPath);
             }
-            int[] allYears = new int[6] { 2021, 2020, 2019, 2018, 2017, 2016 };
             using (ExcelPackage xlPackage = new ExcelPackage(new FileInfo(reportPath)))
             {
                 var workbook = xlPackage.Workbook;
@@ -179,9 +301,33 @@ namespace finances
             {
                 var sheet = xlPackage.Workbook.Worksheets.First();
                 sheet.Calculate();
+
+                var accountSheet = xlPackage.Workbook.Worksheets["Compte de résultat"];
+                if (accountSheet != null)
+                {
+                    var debtCost = accountSheet.Cells["M41"].GetValue<String>();
+                    if (!String.IsNullOrWhiteSpace(debtCost) && debtCost != "n/c" && debtCost != "n/a")
+                    {
+                        var key_lower = "coût du capital";
+                        if (!values.ContainsKey(key_lower))
+                        {
+                            values.Add(key_lower, new Dictionary<Company, Dictionary<int, string>>());
+                        }
+                        var key_values = values[key_lower];
+                        if (!key_values.ContainsKey(company))
+                        {
+                            key_values.Add(company, new Dictionary<int, string>());
+                        }
+                        var company_history = key_values[company];
+                        if (!company_history.ContainsKey(year))
+                        {
+                            company_history.Add(year, debtCost);
+                        }
+                    }
+                }
+
                 var rowCount = sheet.Dimension.End.Row;
                 var columnCount = sheet.Dimension.End.Column;
-
                 var sb = new StringBuilder(); //this is your data
                 for (int rowNum = 3; rowNum <= rowCount; rowNum++) //select starting row here
                 {
